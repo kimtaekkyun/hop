@@ -8,7 +8,8 @@
   hop list           list all bookmarks
   hop rm NAME        remove NAME
   hop edit [what]    open the bookmarks file (or `config`) in your editor
-  hop config [K [V]] show config, or set key K to V  (e.g. hop config editor nvim)
+  hop config         show every setting: what it does, its value, how to set it
+  hop config K V     set setting K to V   (settings: editor)
   hop init [bash|zsh]  print shell wrapper for rc — eval "$(hop init bash)"
   hop                list all (no arguments)
 
@@ -42,7 +43,16 @@ CONFIG_HEADER = (
     "# editor: command opening file bookmarks; flags allowed, e.g. `code -w`\n"
 )
 
-CONFIG_KEYS = ("editor",)
+# Every setting hop understands, with the text `hop config` prints to explain it.
+CONFIG_KEYS = {
+    "editor": {
+        "what": "Command that opens file bookmarks. Flags are allowed.",
+        "hint": "Must stay in the foreground until you close the file, so"
+                " `code -w`, not `code`.",
+        "examples": ("nvim", "vim", "nano", "code -w", "subl -w"),
+        "order": "$HOP_EDITOR, this file, $VISUAL, $EDITOR, vi",
+    },
+}
 
 
 def _read_pairs(path):
@@ -89,15 +99,24 @@ def resolve(p):
     return os.path.abspath(os.path.expanduser(p))
 
 
+def editor_source():
+    """(command, where it came from) for opening file bookmarks."""
+    value = os.environ.get("HOP_EDITOR")
+    if value:
+        return value, "$HOP_EDITOR"
+    value = load_config().get("editor")
+    if value:
+        return value, str(CONFIG)
+    for var in ("VISUAL", "EDITOR"):
+        value = os.environ.get(var)
+        if value:
+            return value, f"${var}"
+    return "vi", "built-in default"
+
+
 def editor():
     """The command used to open file bookmarks. May carry flags (`code -w`)."""
-    return (
-        os.environ.get("HOP_EDITOR")
-        or load_config().get("editor")
-        or os.environ.get("VISUAL")
-        or os.environ.get("EDITOR")
-        or "vi"
-    )
+    return editor_source()[0]
 
 
 def shell_path(p):
@@ -142,12 +161,16 @@ def cmd_set(name, path="."):
     marks[name] = path
     save(marks)
     if os.path.isdir(path):
-        kind = "dir, cd"
-    elif os.path.isfile(path):
-        kind = f"file, opens in {editor()}"
-    else:
-        kind = "missing — nothing there yet"
-    print(f"hop: {name} -> {path}  ({kind})")
+        print(f"hop: {name} -> {path}  (dir, cd)")
+        return
+    if not os.path.isfile(path):
+        print(f"hop: {name} -> {path}  (missing — nothing there yet)")
+        return
+    ed, source = editor_source()
+    print(f"hop: {name} -> {path}  (file, opens in {ed})")
+    # First file bookmark with no editor chosen: say how to change it, once.
+    if source == "built-in default":
+        print(f"hop: to open files with something else: hop config editor nvim")
 
 
 def cmd_list():
@@ -188,22 +211,28 @@ def cmd_edit(what="bookmarks"):
 
 
 def cmd_config(key=None, value=None):
-    cfg = load_config()
+    """Show every setting with its current value and how to change it, or set one."""
     if key is None:
-        print(f"# {CONFIG}")
-        for k, v in cfg.items():
-            print(f"{k}={v}")
-        if "editor" not in cfg:
-            print(f"# editor is unset — using {editor()} (from $HOP_EDITOR/$VISUAL/$EDITOR)")
+        for name, spec in CONFIG_KEYS.items():
+            current, source = editor_source()
+            print(f"{name} = {current}     (from {source})")
+            print(f"    {spec['what']}")
+            print(f"    {spec['hint']}")
+            print(f"    set it:   hop config {name} nvim        (values: "
+                  f"{', '.join(spec['examples'])})")
+            print(f"    resolved from: {spec['order']}")
+        print(f"\nconfig file: {CONFIG}"
+              + ("" if CONFIG.is_file() else "   (not created yet)")
+              + "\nedit it by hand: hop edit config")
         return
     if key not in CONFIG_KEYS:
-        die(f"unknown config key '{key}'. known keys: {', '.join(CONFIG_KEYS)}")
+        die(f"unknown setting '{key}'. hop knows: {', '.join(CONFIG_KEYS)}"
+            f"\n      run `hop config` to see what each one does")
     if value is None:
-        print(cfg.get(key, ""))
+        print(editor_source()[0])  # effective value, not just what's in the file
         return
-    cfg[key] = value
-    save_config(cfg)
-    print(f"hop: {key}={value}   ({CONFIG})")
+    save_config(dict(load_config(), **{key: value}))
+    print(f"hop: {key} = {value}   ({CONFIG})")
 
 
 _FUNC = '''hop() {

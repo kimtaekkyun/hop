@@ -43,7 +43,8 @@ hop set NAME [P]   add/overwrite NAME -> P      (P defaults to the current dir)
 hop list           list all bookmarks
 hop rm NAME        remove NAME
 hop edit [what]    open the bookmarks file (or `config`) in your editor
-hop config K [V]   show or set config           (e.g. hop config editor nvim)
+hop config         show every setting: what it does, its value, how to set it
+hop config K V     set setting K to V           (settings: editor)
 hop init [bash|zsh]  print the shell wrapper for your rc
 hop                list all (no args)
 ```
@@ -53,26 +54,32 @@ Tab-completion on bookmark names is included (`hop w<TAB>` → `work`).
 `hop list` marks directories with a trailing `/`, and flags bookmarks whose
 target has disappeared as `(missing)`.
 
-## The editor
+## Settings
 
-File bookmarks open with the first of these that is set:
+`hop config` is self-documenting — it tells you every setting, its current
+value, where that value came from, and the command to change it:
 
-1. `$HOP_EDITOR`
-2. the `editor` key in the config file
-3. `$VISUAL`
-4. `$EDITOR`
-5. `vi`
+```
+$ hop config
+editor = vi     (from built-in default)
+    Command that opens file bookmarks. Flags are allowed.
+    Must stay in the foreground until you close the file, so `code -w`, not `code`.
+    set it:   hop config editor nvim        (values: nvim, vim, nano, code -w, subl -w)
+    resolved from: $HOP_EDITOR, this file, $VISUAL, $EDITOR, vi
+
+config file: ~/.config/hop/config   (not created yet)
+edit it by hand: hop edit config
+```
+
+So there is one setting today, `editor`, and one command to change it:
 
 ```bash
-hop config editor nvim      # set it
-hop config editor           # show it
-hop config                  # show the whole config
-hop edit config             # hand-edit it
+hop config editor nvim        # set it
+hop config editor             # print the effective value
+hop config                    # the overview above
 ```
 
 The value is a command line, so flags work: `hop config editor "code -w"`.
-Use a **blocking** editor (`vim`, `nano`, `code -w`) — `hop` runs it in the
-foreground, and a non-blocking one returns to the prompt immediately.
 
 ## Why? (vs zoxide / autojump)
 
