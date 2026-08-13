@@ -140,8 +140,22 @@ def lookup(name):
     return marks[name]
 
 
-def cmd_get(name):
+def cmd_get(name, bare=False):
     print(lookup(name))
+    # The wrapper always calls `hop _dispatch`, so a bare `hop NAME` typed at a
+    # terminal means the wrapper is missing from this shell — which just looks
+    # broken ("why did it print a path?"). Say so. A captured path is the
+    # documented scripting use, so stay quiet when stdout isn't a terminal.
+    if bare and sys.stdout.isatty():
+        sh = "zsh" if os.environ.get("SHELL", "").endswith("zsh") else "bash"
+        rc = f"~/.{sh}rc"
+        print(
+            f"\nhop: printed the path instead of going there, because the shell"
+            f" wrapper\n      isn't loaded in this shell."
+            f"\n      fix: source {rc}      (or just open a new terminal)"
+            f"\n      no wrapper in {rc}? add:  eval \"$(hop init {sh})\"",
+            file=sys.stderr,
+        )
 
 
 def cmd_dispatch(name):
@@ -291,7 +305,7 @@ def main():
     elif a[0] == "init":
         cmd_init(a[1] if len(a) > 1 else "bash")
     else:
-        cmd_get(a[0])  # bare name -> get
+        cmd_get(a[0], bare=True)  # bare name, wrapper absent -> print + explain
 
 
 if __name__ == "__main__":
