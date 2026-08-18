@@ -3,14 +3,16 @@
 
   hop NAME           go to NAME: cd if it points at a directory, open it in
                      your editor if it points at a file
-  hop get NAME       print NAME's resolved path   (scripts: cd "$(hop get NAME)")
-  hop set NAME [P]   add/overwrite NAME -> P   (P defaults to the current dir)
-  hop list           list all bookmarks
-  hop rm NAME        remove NAME
-  hop edit [what]    open the bookmarks file (or `config`) in your editor
+  hop jump NAME      explicit form of `hop NAME` (also works for reserved names)
+  hop add NAME [P]   add/update NAME -> P   (P defaults to the current dir)
+  hop list           list all bookmarks (`ls` is a shortcut)
+  hop remove NAME    remove NAME (`rm` is a shortcut)
+  hop path NAME      print NAME's path   (scripts: cd "$(hop path NAME)")
+  hop edit [bookmarks|config]
+                     open the selected file in your editor (bookmarks by default)
   hop config         show every setting: what it does, its value, how to set it
   hop config K V     set setting K to V   (settings: editor)
-  hop init [bash|zsh]  print shell wrapper for rc — eval "$(hop init bash)"
+  hop init bash|zsh  print shell wrapper for rc — eval "$(hop init bash)"
   hop                list all (no arguments)
 
 Bookmarks: $HOP_BOOKMARKS (default ~/.local/share/hop/bookmarks)
@@ -140,7 +142,7 @@ def lookup(name):
     return marks[name]
 
 
-def cmd_get(name, bare=False):
+def cmd_path(name, bare=False):
     print(lookup(name))
     # The wrapper always calls `hop _dispatch`, so a bare `hop NAME` typed at a
     # terminal means the wrapper is missing from this shell — which just looks
@@ -169,19 +171,21 @@ def cmd_dispatch(name):
         die(f"'{name}' points at a missing path: {path}")
 
 
-def cmd_set(name, path="."):
+def cmd_add(name, path="."):
     marks = load()
+    existed = name in marks
     path = resolve(path)
     marks[name] = path
     save(marks)
+    action = "updated" if existed else "added"
     if os.path.isdir(path):
-        print(f"hop: {name} -> {path}  (dir, cd)")
+        print(f"hop: {action} {name} -> {path}  (dir, cd)")
         return
     if not os.path.isfile(path):
-        print(f"hop: {name} -> {path}  (missing — nothing there yet)")
+        print(f"hop: {action} {name} -> {path}  (missing — nothing there yet)")
         return
     ed, source = editor_source()
-    print(f"hop: {name} -> {path}  (file, opens in {ed})")
+    print(f"hop: {action} {name} -> {path}  (file, opens in {ed})")
     # First file bookmark with no editor chosen: say how to change it, once.
     if source == "built-in default":
         print(f"hop: to open files with something else: hop config editor nvim")
@@ -190,20 +194,20 @@ def cmd_set(name, path="."):
 def cmd_list():
     marks = load()
     if not marks:
-        print(f"hop: no bookmarks. add: hop set <name> [path]   (db: {DB})")
+        print(f"hop: no bookmarks. add: hop add <name> [path]   (db: {DB})")
         return
     width = max(len(n) for n in marks)
     for name, path in marks.items():
         if os.path.isdir(path):
-            shown = path.rstrip("/") + "/"
+            shown = path.rstrip("/") + "/  [dir]"
         elif os.path.isfile(path):
-            shown = path
+            shown = f"{path}  [file]"
         else:
-            shown = f"{path}  (missing)"
+            shown = f"{path}  [missing]"
         print(f"{name:<{width}}  {shown}")
 
 
-def cmd_rm(name):
+def cmd_remove(name):
     marks = load()
     if name not in marks:
         die(f"no bookmark '{name}'")
@@ -251,9 +255,23 @@ def cmd_config(key=None, value=None):
 
 _FUNC = '''hop() {
   case "${1:-}" in
-    get|set|rm|del|list|edit|config|init|help|-h|--help|_dispatch) command hop "$@" ;;
+    add|list|ls|remove|rm|path|edit|config|init|help|-h|--help|_dispatch)
+      command hop "$@" ;;
+    jump)
+      if [ "$#" -ne 2 ]; then
+        command hop "$@"
+        return
+      fi
+      local __hop_cmd
+      __hop_cmd=$(command hop _dispatch "$2") || return
+      eval "$__hop_cmd"
+      ;;
     "") command hop ;;
     *)
+      if [ "$#" -ne 1 ]; then
+        printf '%s\\n' 'hop: usage: hop NAME' >&2
+        return 2
+      fi
       local __hop_cmd
       __hop_cmd=$(command hop _dispatch "$1") || return
       eval "$__hop_cmd"
@@ -263,13 +281,69 @@ _FUNC = '''hop() {
 
 _BASH_COMP = '''_hop_completions() {
   local f="${HOP_BOOKMARKS:-$HOME/.local/share/hop/bookmarks}"
-  COMPREPLY=($(compgen -W "$(awk -F= \'!/^[[:space:]]*(#|$)/{print $1}\' "$f" 2>/dev/null)" -- "${COMP_WORDS[COMP_CWORD]}"))
+  local word="${COMP_WORDS[COMP_CWORD]}"
+  local names
+  names="$(awk -F= \'!/^[[:space:]]*(#|$)/{print $1}\' "$f" 2>/dev/null)"
+  if (( COMP_CWORD == 1 )); then
+    COMPREPLY=($(compgen -W "add list ls remove rm path edit config init jump help $names" -- "$word"))
+    return
+  fi
+  case "${COMP_WORDS[1]}" in
+    remove|rm|path|jump)
+      if (( COMP_CWORD == 2 )); then
+        COMPREPLY=($(compgen -W "$names" -- "$word"))
+      fi
+      ;;
+    edit)
+      if (( COMP_CWORD == 2 )); then
+        COMPREPLY=($(compgen -W "bookmarks config" -- "$word"))
+      fi
+      ;;
+    config)
+      if (( COMP_CWORD == 2 )); then
+        COMPREPLY=($(compgen -W "editor" -- "$word"))
+      fi
+      ;;
+    init)
+      if (( COMP_CWORD == 2 )); then
+        COMPREPLY=($(compgen -W "bash zsh" -- "$word"))
+      fi
+      ;;
+    add)
+      if (( COMP_CWORD == 3 )); then
+        compopt -o filenames
+        COMPREPLY=($(compgen -f -- "$word"))
+      fi
+      ;;
+  esac
 }
 complete -F _hop_completions hop'''
 
 _ZSH_COMP = '''_hop() {
   local f="${HOP_BOOKMARKS:-$HOME/.local/share/hop/bookmarks}"
-  compadd -- $(awk -F= \'!/^[[:space:]]*(#|$)/{print $1}\' "$f" 2>/dev/null)
+  if (( CURRENT == 2 )); then
+    compadd -- add list ls remove rm path edit config init jump help \
+      $(awk -F= \'!/^[[:space:]]*(#|$)/{print $1}\' "$f" 2>/dev/null)
+    return
+  fi
+  case "$words[2]" in
+    remove|rm|path|jump)
+      (( CURRENT == 3 )) &&
+        compadd -- $(awk -F= \'!/^[[:space:]]*(#|$)/{print $1}\' "$f" 2>/dev/null)
+      ;;
+    edit)
+      (( CURRENT == 3 )) && compadd -- bookmarks config
+      ;;
+    config)
+      (( CURRENT == 3 )) && compadd -- editor
+      ;;
+    init)
+      (( CURRENT == 3 )) && compadd -- bash zsh
+      ;;
+    add)
+      (( CURRENT == 4 )) && _files
+      ;;
+  esac
 }
 # compinit may not have run yet (rc order varies) — register only if it has.
 (( $+functions[compdef] )) && compdef _hop hop'''
@@ -285,27 +359,53 @@ def cmd_init(shell="bash"):
 def main():
     a = sys.argv[1:]
     if not a or a[0] == "list":
+        if len(a) > 1:
+            die("usage: hop list")
+        cmd_list()
+    elif a[0] == "ls":
+        if len(a) > 1:
+            die("usage: hop ls")
         cmd_list()
     elif a[0] in ("-h", "--help", "help"):
+        if len(a) > 1:
+            die("usage: hop --help")
         print(__doc__)
-    elif a[0] == "get":
-        cmd_get(a[1]) if len(a) > 1 else die("usage: hop get NAME")
+    elif a[0] == "path":
+        if len(a) != 2:
+            die("usage: hop path NAME")
+        cmd_path(a[1])
     elif a[0] == "_dispatch":
-        cmd_dispatch(a[1]) if len(a) > 1 else die("usage: hop _dispatch NAME")
-    elif a[0] == "set":
-        if len(a) < 2:
-            die("usage: hop set NAME [PATH]")
-        cmd_set(a[1], a[2] if len(a) > 2 else ".")
-    elif a[0] in ("rm", "del"):
-        cmd_rm(a[1]) if len(a) > 1 else die("usage: hop rm NAME")
+        if len(a) != 2:
+            die("usage: hop _dispatch NAME")
+        cmd_dispatch(a[1])
+    elif a[0] == "jump":
+        if len(a) != 2:
+            die("usage: hop jump NAME")
+        cmd_dispatch(a[1])
+    elif a[0] == "add":
+        if len(a) not in (2, 3):
+            die("usage: hop add NAME [PATH]")
+        cmd_add(a[1], a[2] if len(a) == 3 else ".")
+    elif a[0] in ("remove", "rm"):
+        if len(a) != 2:
+            die(f"usage: hop {a[0]} NAME")
+        cmd_remove(a[1])
     elif a[0] == "edit":
-        cmd_edit(a[1] if len(a) > 1 else "bookmarks")
+        if len(a) > 2:
+            die("usage: hop edit [bookmarks|config]")
+        cmd_edit(a[1] if len(a) == 2 else "bookmarks")
     elif a[0] == "config":
+        if len(a) > 3:
+            die("usage: hop config [KEY [VALUE]]")
         cmd_config(a[1] if len(a) > 1 else None, a[2] if len(a) > 2 else None)
     elif a[0] == "init":
-        cmd_init(a[1] if len(a) > 1 else "bash")
+        if len(a) != 2:
+            die("usage: hop init bash|zsh")
+        cmd_init(a[1])
     else:
-        cmd_get(a[0], bare=True)  # bare name, wrapper absent -> print + explain
+        if len(a) != 1:
+            die("usage: hop NAME")
+        cmd_path(a[0], bare=True)  # wrapper absent -> print + explain
 
 
 if __name__ == "__main__":

@@ -6,8 +6,8 @@ Bookmark a **directory** and `hop` cds into it. Bookmark a **file** and `hop`
 opens it in your editor. One name, one keystroke, the right action.
 
 ```bash
-hop set work ~/w/work          # a directory
-hop set todo ~/notes/todo.md   # a file
+hop add work ~/w/work          # a directory
+hop add todo ~/notes/todo.md   # a file
 
 hop work    # → cd ~/w/work
 hop todo    # → nvim ~/notes/todo.md
@@ -38,21 +38,22 @@ Same result as the one-liner. The clone is no longer needed after install.
 
 ```
 hop NAME           cd there (directory) or open it in your editor (file)
-hop get NAME       print NAME's resolved path   (scripts: cd "$(hop get NAME)")
-hop set NAME [P]   add/overwrite NAME -> P      (P defaults to the current dir)
-hop list           list all bookmarks
-hop rm NAME        remove NAME
-hop edit [what]    open the bookmarks file (or `config`) in your editor
+hop jump NAME      explicit form of `hop NAME` (also works for reserved names)
+hop add NAME [P]   add/update NAME -> P         (P defaults to the current dir)
+hop list           list all bookmarks           (shortcut: `hop ls`)
+hop remove NAME    remove NAME                  (shortcut: `hop rm`)
+hop path NAME      print NAME's path            (scripts: `cd "$(hop path NAME)"`)
+hop edit [bookmarks|config]
+                   open the selected file in your editor (bookmarks by default)
 hop config         show every setting: what it does, its value, how to set it
 hop config K V     set setting K to V           (settings: editor)
-hop init [bash|zsh]  print the shell wrapper for your rc
+hop init bash|zsh  print the shell wrapper for your rc
 hop                list all (no args)
 ```
 
 Tab-completion on bookmark names is included (`hop w<TAB>` → `work`).
 
-`hop list` marks directories with a trailing `/`, and flags bookmarks whose
-target has disappeared as `(missing)`.
+`hop list` marks entries as `[dir]`, `[file]`, or `[missing]`.
 
 ## Settings
 
@@ -113,7 +114,8 @@ An executable can't change its parent shell's directory, so `hop NAME` alone
 only *prints* the path. `hop init bash` emits a tiny shell function that asks
 `hop` what to do with a name and evaluates the answer — `cd -- <path>` for a
 directory, `<editor> <path>` for a file. `eval "$(hop init bash)"` in your rc
-loads it, the same pattern zoxide/fzf use.
+loads it, the same pattern zoxide/fzf use. `hop jump NAME` is the explicit
+form when a bookmark name conflicts with a command such as `list` or `config`.
 
 ## Customize
 
