@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""hop — named bookmarks for directories and files.
+"""hop — named targets for directories, files, and commands.
 
-  hop NAME           go to NAME: cd if it points at a directory, open it in
-                     your editor if it points at a file
+  hop NAME           use NAME: cd for a directory, open a file in your editor,
+                     or run a command
   hop jump NAME      explicit form of `hop NAME` (also works for reserved names)
-  hop add NAME [P]   add/update NAME -> P   (P defaults to the current dir)
-  hop list           list all bookmarks (`ls` is a shortcut)
+  hop add NAME [T]   add/update NAME -> T   (T defaults to the current dir)
+  hop list           list all targets (`ls` is a shortcut)
   hop remove NAME    remove NAME (`rm` is a shortcut)
   hop path NAME      print NAME's path   (scripts: cd "$(hop path NAME)")
   hop edit [bookmarks|config]
@@ -15,15 +15,15 @@
   hop init bash|zsh  print shell wrapper for rc — eval "$(hop init bash)"
   hop                list all (no arguments)
 
-Bookmarks: $HOP_BOOKMARKS (default ~/.local/share/hop/bookmarks)
+Targets:   $HOP_BOOKMARKS (default ~/.local/share/hop/bookmarks)
 Config:    $HOP_CONFIG    (default ~/.config/hop/config)
 Both are plain `key=value` text, '#' = comments, hand-editable.
 
 Editor lookup order: $HOP_EDITOR, config `editor`, $VISUAL, $EDITOR, vi.
 
-No executable can change its parent shell's directory, so `hop NAME` alone only
-prints a path. Put `eval "$(hop init bash)"` (or zsh) in your rc so `hop NAME`
-cds / opens directly — same pattern as zoxide/fzf.
+The shell wrapper evaluates the selected action, including `cd` for directories.
+Put `eval "$(hop init bash)"` (or zsh) in your rc so `hop NAME` cds, opens, or
+runs directly — same pattern as zoxide/fzf.
 """
 import os
 import shlex
@@ -35,9 +35,13 @@ from pathlib import Path
 DB = Path(os.environ.get("HOP_BOOKMARKS") or os.path.expanduser("~/.local/share/hop/bookmarks"))
 CONFIG = Path(os.environ.get("HOP_CONFIG") or os.path.expanduser("~/.config/hop/config"))
 
+PATH_PREFIX = "path:"
+COMMAND_PREFIX = "cmd:"
+
 DB_HEADER = (
-    "# hop bookmarks — one `name=path` per line, '#' lines are comments.\n"
-    "# A path may be a directory (hop cds) or a file (hop opens your editor).\n"
+    "# hop targets — one `name=target` per line, '#' lines are comments.\n"
+    "# Existing paths are stored as `path:/absolute/path`.\n"
+    "# Commands are stored as `cmd:command with arguments`.\n"
 )
 
 CONFIG_HEADER = (
@@ -101,6 +105,54 @@ def resolve(p):
     return os.path.abspath(os.path.expanduser(p))
 
 
+def decode_target(raw):
+    if raw.startswith(COMMAND_PREFIX):
+        return "command", raw[len(COMMAND_PREFIX):]
+    if raw.startswith(PATH_PREFIX):
+        return "path", raw[len(PATH_PREFIX):]
+    # Existing bookmark files predate typed targets and contain plain paths.
+    return "path", raw
+
+
+def encode_target(kind, value):
+    if kind == "command":
+        return COMMAND_PREFIX + value
+    return PATH_PREFIX + value
+
+
+def looks_like_path(value):
+    expanded = os.path.expanduser(value)
+    if value.startswith(("~", "/", "./", "../", ".\\", "..\\", "\\\\")):
+        return True
+    if "/" in value or "\\" in value:
+        return True
+    return len(expanded) >= 3 and expanded[1] == ":" and expanded[2] in "/\\"
+
+
+def command_tokens(value):
+    try:
+        return shlex.split(value)
+    except ValueError:
+        return []
+
+
+def classify_target(value):
+    """Return (kind, stored value), preserving existing path semantics."""
+    path = resolve(value)
+    if os.path.isdir(path) or os.path.isfile(path):
+        return "path", path
+
+    tokens = command_tokens(value)
+    if tokens and shutil.which(tokens[0]) and (
+        len(tokens) > 1 or not looks_like_path(value)
+    ):
+        return "command", value
+
+    # Missing paths and ambiguous single tokens remain paths so they can be
+    # created later or opened when they appear.
+    return "path", path
+
+
 def editor_source():
     """(command, where it came from) for opening file bookmarks."""
     value = os.environ.get("HOP_EDITOR")
@@ -143,7 +195,10 @@ def lookup(name):
 
 
 def cmd_path(name, bare=False):
-    print(lookup(name))
+    kind, value = decode_target(lookup(name))
+    if kind != "path":
+        die(f"'{name}' is a command target, not a path")
+    print(value)
     # The wrapper always calls `hop _dispatch`, so a bare `hop NAME` typed at a
     # terminal means the wrapper is missing from this shell — which just looks
     # broken ("why did it print a path?"). Say so. A captured path is the
@@ -162,7 +217,15 @@ def cmd_path(name, bare=False):
 
 def cmd_dispatch(name):
     """Emit the shell command the wrapper should eval for `hop NAME`."""
-    path = lookup(name)
+    kind, value = decode_target(lookup(name))
+    if kind == "command":
+        tokens = command_tokens(value)
+        if not tokens:
+            die(f"'{name}' has an invalid command target")
+        print(" ".join(shlex.quote(token) for token in tokens))
+        return
+
+    path = value
     if os.path.isdir(path):
         print(f"cd -- {shlex.quote(shell_path(path))}")
     elif os.path.isfile(path):
@@ -171,13 +234,19 @@ def cmd_dispatch(name):
         die(f"'{name}' points at a missing path: {path}")
 
 
-def cmd_add(name, path="."):
+def cmd_add(name, target="."):
     marks = load()
     existed = name in marks
-    path = resolve(path)
-    marks[name] = path
+    kind, value = classify_target(target)
+    marks[name] = encode_target(kind, value)
     save(marks)
     action = "updated" if existed else "added"
+
+    if kind == "command":
+        print(f"hop: {action} {name} -> {value}  (command)")
+        return
+
+    path = value
     if os.path.isdir(path):
         print(f"hop: {action} {name} -> {path}  (dir, cd)")
         return
@@ -194,10 +263,15 @@ def cmd_add(name, path="."):
 def cmd_list():
     marks = load()
     if not marks:
-        print(f"hop: no bookmarks. add: hop add <name> [path]   (db: {DB})")
+        print(f"hop: no targets. add: hop add <name> [target]   (db: {DB})")
         return
     width = max(len(n) for n in marks)
-    for name, path in marks.items():
+    for name, raw in marks.items():
+        kind, value = decode_target(raw)
+        if kind == "command":
+            print(f"{name:<{width}}  {value}  [cmd]")
+            continue
+        path = value
         if os.path.isdir(path):
             shown = path.rstrip("/") + "/  [dir]"
         elif os.path.isfile(path):

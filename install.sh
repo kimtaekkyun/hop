@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hop installer — named bookmarks for directories and files.
+# hop installer — named targets for directories, files, and commands.
 #
 # Install methods (all produce the same result, no source tree needed after):
 #   1) git clone … && ./install.sh        -> copies local hop.py
@@ -82,9 +82,9 @@ esac
 
 # 3) wire the shell wrapper into the rc, idempotently (bash or zsh).
 if [ -n "${ZSH_VERSION:-}" ] || [[ "${SHELL:-}" == *zsh ]]; then
-  RC="$HOME/.zshrc"; LINE='eval "$(hop init zsh)"'
+  RC="$HOME/.zshrc"; LINE='eval "$(hop init zsh)"'; SHELL_NAME=zsh
 else
-  RC="$HOME/.bashrc"; LINE='eval "$(hop init bash)"'
+  RC="$HOME/.bashrc"; LINE='eval "$(hop init bash)"'; SHELL_NAME=bash
 fi
 touch "$RC"
 if grep -qxF "$LINE" "$RC"; then
@@ -95,4 +95,5 @@ else
 fi
 
 echo
-echo "done. Start a new shell (or: source $RC), then try:  hop list"
+echo "done. Refresh the current shell with:  eval \"\$(hop init $SHELL_NAME)\""
+echo "or start a new shell (or: source $RC), then try:  hop list"
